@@ -92,6 +92,7 @@ FileTransfer.prototype.upload = function(filePath, server, successCallback, erro
     var mimeType = null;
     var params = null;
     var chunkedMode = true;
+    var sendChunks = false;
     var headers = null;
     var httpMethod = null;
     var basicAuthHeader = getBasicAuthHeader(server);
@@ -117,6 +118,9 @@ FileTransfer.prototype.upload = function(filePath, server, successCallback, erro
         if (options.chunkedMode !== null || typeof options.chunkedMode != "undefined") {
             chunkedMode = options.chunkedMode;
         }
+        if (options.sendChunks !== null || typeof options.sendChunks != "undefined") {
+            sendChunks = options.sendChunks;
+        }
         if (options.params) {
             params = options.params;
         }
@@ -140,7 +144,7 @@ FileTransfer.prototype.upload = function(filePath, server, successCallback, erro
             successCallback && successCallback(result);
         }
     };
-    exec(win, fail, 'FileTransfer', 'upload', [filePath, server, fileKey, fileName, mimeType, params, trustAllHosts, chunkedMode, headers, this._id, httpMethod]);
+    exec(win, fail, 'FileTransfer', 'upload', [filePath, server, fileKey, fileName, mimeType, params, trustAllHosts, chunkedMode, headers, this._id, httpMethod, sendChunks]);
 };
 
 /**

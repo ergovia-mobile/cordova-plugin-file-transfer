@@ -26,11 +26,18 @@
 #import <AssetsLibrary/ALAssetsLibrary.h>
 #import <CFNetwork/CFNetwork.h>
 
+@implementation ChunkTransporter
+
+
+
+@end
+
 @interface CDVFileTransfer ()
 // Sets the requests headers for the request.
 - (void)applyRequestHeaders:(NSDictionary*)headers toRequest:(NSMutableURLRequest*)req;
 // Creates a delegate to handle an upload.
 - (CDVFileTransferDelegate*)delegateForUploadCommand:(CDVInvokedUrlCommand*)command;
+- (CDVFileTransferDelegate*)delegateForChunkedUploadCommand:(CDVInvokedUrlCommand*)command;
 // Creates an NSData* for the file for the given upload arguments.
 - (void)fileDataForUploadCommand:(CDVInvokedUrlCommand*)command;
 @end
@@ -125,6 +132,48 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
             }
         }
     }
+}
+
+
+- (NSURLRequest*)chunkedRequestForUploadCommand:(CDVInvokedUrlCommand*)command transporter:(ChunkTransporter * ) transporter {
+    
+    NSString* server = [command argumentAtIndex:1];
+    
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:server]];
+    
+    
+    NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", kFormBoundary];
+    [request addValue:contentType forHTTPHeaderField:@"Content-Type"];
+    
+    NSMutableData *body = [NSMutableData data];
+    
+    NSRange range = {transporter.chunkStart, transporter.chunkSize};
+    NSData *chunk = [transporter.file subdataWithRange:range];
+    
+    NSLog(@"%lu", (unsigned long)[transporter.file length]);
+    
+    [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"chunk\"\r\n"] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[@"Content-Type: application/octet-stream\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[NSData dataWithData:chunk]];
+    
+    [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"chunkNumber\"\r\n\r\n%lu", (unsigned long)transporter.currentChunk] dataUsingEncoding:NSUTF8StringEncoding]];
+    
+    [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"numOfChunks\"\r\n\r\n%lu", (unsigned long)transporter.totalChunks] dataUsingEncoding:NSUTF8StringEncoding]];
+    
+    [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"token\"\r\n\r\n%@", @"BLABLATOKENTEST"] dataUsingEncoding:NSUTF8StringEncoding]];
+    
+    [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    
+    [request setHTTPBody:body];
+    
+    
+    [request setHTTPMethod:@"POST"];
+    
+    return request;
 }
 
 - (NSURLRequest*)requestForUploadCommand:(CDVInvokedUrlCommand*)command fileData:(NSData*)fileData
@@ -267,6 +316,27 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     return delegate;
 }
 
+- (CDVFileTransferDelegate*) delegateForChunkedUploadCommand:(CDVInvokedUrlCommand *) command {
+    NSString* source = [command.arguments objectAtIndex:0];
+    NSString* server = [command.arguments objectAtIndex:1];
+    BOOL trustAllHosts = [[command.arguments objectAtIndex:6 withDefault:[NSNumber numberWithBool:NO]] boolValue]; // allow self-signed certs
+    NSString* objectId = [command.arguments objectAtIndex:9];
+    
+    CDVFileTransferDelegate* delegate = [[CDVFileTransferDelegate alloc] init];
+    
+    delegate.command = self;
+    delegate.callbackId = command.callbackId;
+    delegate.direction = CDV_CHUNKED_UPLOAD;
+    delegate.objectId = objectId;
+    delegate.source = source;
+    delegate.target = server;
+    delegate.trustAllHosts = trustAllHosts;
+    delegate.filePlugin = [self.commandDelegate getCommandInstance:@"File"];
+    
+    return delegate;
+}
+
+
 - (void)fileDataForUploadCommand:(CDVInvokedUrlCommand*)command
 {
     NSString* source = (NSString*)[command.arguments objectAtIndex:0];
@@ -321,29 +391,94 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     [self fileDataForUploadCommand:command];
 }
 
-- (void)uploadData:(NSData*)fileData command:(CDVInvokedUrlCommand*)command
-{
-    NSURLRequest* req = [self requestForUploadCommand:command fileData:fileData];
 
-    if (req == nil) {
-        return;
+
+- (void)startRequestDelegateWith:(CDVInvokedUrlCommand *)command AndRequest:(NSURLRequest *)req
+{
+ 
+    BOOL sendChunked = [[command argumentAtIndex:11 withDefault:[NSNumber numberWithBool:NO]] boolValue];
+    
+    CDVFileTransferDelegate* delegate;
+    if (sendChunked) {
+        delegate = [self delegateForChunkedUploadCommand:command];
+    } else {
+        delegate = [self delegateForUploadCommand:command];
     }
-    CDVFileTransferDelegate* delegate = [self delegateForUploadCommand:command];
+
     delegate.connection = [[NSURLConnection alloc] initWithRequest:req delegate:delegate startImmediately:NO];
     if (self.queue == nil) {
         self.queue = [[NSOperationQueue alloc] init];
     }
     [delegate.connection setDelegateQueue:self.queue];
-
+    
     // sets a background task ID for the transfer object.
     delegate.backgroundTaskID = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
         [delegate cancelTransfer:delegate.connection];
     }];
-
+    
     @synchronized (activeTransfers) {
         activeTransfers[delegate.objectId] = delegate;
     }
     [delegate.connection start];
+}
+
+- (void) uploadChunk:(ChunkTransporter *) transporter command:(CDVInvokedUrlCommand *) command {
+    
+    NSURLRequest* req = [self chunkedRequestForUploadCommand:command transporter:(ChunkTransporter *) transporter];
+    [self startRequestDelegateWith:command AndRequest:req];
+    
+}
+
+- (void)uploadData:(NSData*)fileData command:(CDVInvokedUrlCommand*)command
+{
+ 
+    BOOL sendChunked = [[command argumentAtIndex:11 withDefault:[NSNumber numberWithBool:NO]] boolValue];
+    
+    if (sendChunked) {
+        
+        NSUInteger chunkSize = 100 * 1024;
+        
+        ChunkTransporter *transporter = [ChunkTransporter new];
+        
+        transporter.file = fileData;
+        transporter.urlCommand = command;
+        transporter.chunkStart = 0;
+        transporter.chunkEnd = chunkSize;
+        transporter.chunkSize = chunkSize;
+        transporter.currentChunk = 1;
+        transporter.totalChunks = [fileData length] / chunkSize;
+        
+        self.chunkTransporter = transporter;
+        
+        [self uploadChunk:transporter command:command];
+    
+    } else {
+    
+        NSURLRequest* req = [self requestForUploadCommand:command fileData:fileData];
+        
+        if (req == nil) {
+            return;
+        }
+        CDVFileTransferDelegate* delegate = [self delegateForUploadCommand:command];
+        delegate.connection = [[NSURLConnection alloc] initWithRequest:req delegate:delegate startImmediately:NO];
+        if (self.queue == nil) {
+            self.queue = [[NSOperationQueue alloc] init];
+        }
+        [delegate.connection setDelegateQueue:self.queue];
+        
+        // sets a background task ID for the transfer object.
+        delegate.backgroundTaskID = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+            [delegate cancelTransfer:delegate.connection];
+        }];
+        
+        @synchronized (activeTransfers) {
+            activeTransfers[delegate.objectId] = delegate;
+        }
+        [delegate.connection start];
+    
+    }
+
+
 }
 
 - (void)abort:(CDVInvokedUrlCommand*)command
@@ -539,48 +674,79 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSString* downloadResponse = nil;
     NSMutableDictionary* uploadResult;
     CDVPluginResult* result = nil;
-
+    NSLog(@"BLABLA");
     NSLog(@"File Transfer Finished with response code %d", self.responseCode);
 
-    if (self.direction == CDV_TRANSFER_UPLOAD) {
-        uploadResponse = [[NSString alloc] initWithData:self.responseData encoding:NSUTF8StringEncoding];
-
-        if ((self.responseCode >= 200) && (self.responseCode < 300)) {
-            // create dictionary to return FileUploadResult object
-            uploadResult = [NSMutableDictionary dictionaryWithCapacity:3];
-            if (uploadResponse != nil) {
-                [uploadResult setObject:uploadResponse forKey:@"response"];
-                [uploadResult setObject:self.responseHeaders forKey:@"headers"];
+    
+    if (self.direction == CDV_CHUNKED_UPLOAD) {
+        
+        if (self.responseCode == 201) {
+            command.chunkTransporter.currentChunk++;
+            command.chunkTransporter.chunkStart = command.chunkTransporter.chunkEnd;
+            command.chunkTransporter.chunkEnd = command.chunkTransporter.chunkEnd + command.chunkTransporter.chunkSize;
+            
+            if (command.chunkTransporter.currentChunk <= command.chunkTransporter.totalChunks) {
+                [command uploadChunk:command.chunkTransporter command:command.chunkTransporter.urlCommand];
+            
+            } else {
+                [self.command.commandDelegate sendPluginResult:result callbackId:callbackId];
+                
+                // remove connection for activeTransfers
+                @synchronized (command.activeTransfers) {
+                    [command.activeTransfers removeObjectForKey:objectId];
+                    // remove background id task in case our upload was done in the background
+                    [[UIApplication sharedApplication] endBackgroundTask:self.backgroundTaskID];
+                    self.backgroundTaskID = UIBackgroundTaskInvalid;
+                }
             }
-            [uploadResult setObject:[NSNumber numberWithLongLong:self.bytesTransfered] forKey:@"bytesSent"];
-            [uploadResult setObject:[NSNumber numberWithInt:self.responseCode] forKey:@"responseCode"];
-            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:uploadResult];
-        } else {
-            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[command createFileTransferError:CONNECTION_ERR AndSource:source AndTarget:target AndHttpStatus:self.responseCode AndBody:uploadResponse]];
+
         }
-    }
-    if (self.direction == CDV_TRANSFER_DOWNLOAD) {
-        if (self.targetFileHandle) {
-            [self.targetFileHandle closeFile];
-            self.targetFileHandle = nil;
-            DLog(@"File Transfer Download success");
-
-            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:[self.filePlugin makeEntryForURL:self.targetURL]];
-        } else {
-            downloadResponse = [[NSString alloc] initWithData:self.responseData encoding:NSUTF8StringEncoding];
-            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[command createFileTransferError:CONNECTION_ERR AndSource:source AndTarget:target AndHttpStatus:self.responseCode AndBody:downloadResponse]];
+    
+    } else {
+    
+        if (self.direction == CDV_TRANSFER_UPLOAD) {
+            uploadResponse = [[NSString alloc] initWithData:self.responseData encoding:NSUTF8StringEncoding];
+            
+            if ((self.responseCode >= 200) && (self.responseCode < 300)) {
+                // create dictionary to return FileUploadResult object
+                uploadResult = [NSMutableDictionary dictionaryWithCapacity:3];
+                if (uploadResponse != nil) {
+                    [uploadResult setObject:uploadResponse forKey:@"response"];
+                    [uploadResult setObject:self.responseHeaders forKey:@"headers"];
+                }
+                [uploadResult setObject:[NSNumber numberWithLongLong:self.bytesTransfered] forKey:@"bytesSent"];
+                [uploadResult setObject:[NSNumber numberWithInt:self.responseCode] forKey:@"responseCode"];
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:uploadResult];
+            } else {
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[command createFileTransferError:CONNECTION_ERR AndSource:source AndTarget:target AndHttpStatus:self.responseCode AndBody:uploadResponse]];
+            }
         }
+        if (self.direction == CDV_TRANSFER_DOWNLOAD) {
+            if (self.targetFileHandle) {
+                [self.targetFileHandle closeFile];
+                self.targetFileHandle = nil;
+                DLog(@"File Transfer Download success");
+                
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:[self.filePlugin makeEntryForURL:self.targetURL]];
+            } else {
+                downloadResponse = [[NSString alloc] initWithData:self.responseData encoding:NSUTF8StringEncoding];
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[command createFileTransferError:CONNECTION_ERR AndSource:source AndTarget:target AndHttpStatus:self.responseCode AndBody:downloadResponse]];
+            }
+        }
+        
+        [self.command.commandDelegate sendPluginResult:result callbackId:callbackId];
+        
+        // remove connection for activeTransfers
+        @synchronized (command.activeTransfers) {
+            [command.activeTransfers removeObjectForKey:objectId];
+            // remove background id task in case our upload was done in the background
+            [[UIApplication sharedApplication] endBackgroundTask:self.backgroundTaskID];
+            self.backgroundTaskID = UIBackgroundTaskInvalid;
+        }
+    
     }
+    
 
-    [self.command.commandDelegate sendPluginResult:result callbackId:callbackId];
-
-    // remove connection for activeTransfers
-    @synchronized (command.activeTransfers) {
-        [command.activeTransfers removeObjectForKey:objectId];
-        // remove background id task in case our upload was done in the background
-        [[UIApplication sharedApplication] endBackgroundTask:self.backgroundTaskID];
-        self.backgroundTaskID = UIBackgroundTaskInvalid;
-    }
 }
 
 - (void)removeTargetFile

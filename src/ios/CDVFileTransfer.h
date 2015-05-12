@@ -32,8 +32,19 @@ typedef int CDVFileTransferError;
 enum CDVFileTransferDirection {
     CDV_TRANSFER_UPLOAD = 1,
     CDV_TRANSFER_DOWNLOAD = 2,
+    CDV_CHUNKED_UPLOAD = 3
 };
 typedef int CDVFileTransferDirection;
+
+@interface ChunkTransporter : NSObject {}
+@property (nonatomic, strong) CDVInvokedUrlCommand *urlCommand;
+@property (nonatomic, strong) NSData *file;
+@property (nonatomic) NSUInteger chunkStart;
+@property (nonatomic) NSUInteger chunkEnd;
+@property (nonatomic) NSUInteger chunkSize;
+@property (nonatomic) NSUInteger currentChunk;
+@property (nonatomic) NSUInteger totalChunks;
+@end
 
 // Magic value within the options dict used to set a cookie.
 extern NSString* const kOptionsKeyCookie;
@@ -55,6 +66,7 @@ extern NSString* const kOptionsKeyCookie;
                                         AndBody:(NSString*)body;
 @property (nonatomic, strong) NSOperationQueue* queue;
 @property (readonly) NSMutableDictionary* activeTransfers;
+@property (nonatomic, strong) ChunkTransporter *chunkTransporter;
 @end
 
 @class CDVFileTransferEntityLengthRequest;
