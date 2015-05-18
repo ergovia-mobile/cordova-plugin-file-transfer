@@ -79,7 +79,7 @@ public class FileTransfer extends CordovaPlugin {
     public static int NOT_MODIFIED_ERR = 5;
 
     private static HashMap<String, RequestContext> activeRequests = new HashMap<String, RequestContext>();
-    private static final int MAX_BUFFER_SIZE = 16 * 1024;
+    private static final int MAX_BUFFER_SIZE = 100 * 1024;
 
     private static final class RequestContext {
         String source;
@@ -179,7 +179,7 @@ public class FileTransfer extends CordovaPlugin {
             String target = args.getString(1);
 
             if (action.equals("upload")) {
-                upload(source, target, args, callbackContext);
+                chunkedUpload(source, target, args, callbackContext);
             } else {
                 download(source, target, args, callbackContext);
             }
@@ -508,6 +508,262 @@ public class FileTransfer extends CordovaPlugin {
             }
         });
     }
+
+    private void chunkedUpload(final String source, final String target, JSONArray args, CallbackContext callbackContext) throws JSONException {
+
+        final String fileKey = getArgument(args, 2, "file");
+        final String fileName = getArgument(args, 3, "image.jpg");
+        final String mimeType = getArgument(args, 4, "image/jpeg");
+        final JSONObject params = args.optJSONObject(5) == null ? new JSONObject() : args.optJSONObject(5);
+        final boolean trustEveryone = args.optBoolean(6);
+        // Always use chunked mode unless set to false as per API
+        final boolean chunkedMode = args.optBoolean(7) || args.isNull(7);
+        // Look for headers on the params map for backwards compatibility with older Cordova versions.
+        final JSONObject headers = args.optJSONObject(8) == null ? params.optJSONObject("headers") : args.optJSONObject(8);
+        final String objectId = args.getString(9);
+        final String httpMethod = getArgument(args, 10, "POST");
+
+        final CordovaResourceApi resourceApi = webView.getResourceApi();
+        final Uri targetUri = resourceApi.remapUri(Uri.parse(target));
+
+        Uri tmpSrc = Uri.parse(source);
+        final Uri sourceUri = resourceApi.remapUri(
+                tmpSrc.getScheme() != null ? tmpSrc : Uri.fromFile(new File(source)));
+
+        int uriType = CordovaResourceApi.getUriType(targetUri);
+
+        /**
+         * Check URI-Type
+         */
+        final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
+        final boolean useHttp = uriType == CordovaResourceApi.URI_TYPE_HTTP;
+        if (!useHttp && !useHttps) {
+            JSONObject error = createFileTransferError(INVALID_URL_ERR, source, target, null, 0, null);
+            Log.e(LOG_TAG, "Unsupported URI: " + targetUri);
+            callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+            return;
+        }
+
+        final RequestContext context = new RequestContext(source, target, callbackContext);
+        synchronized (activeRequests) {
+            activeRequests.put(objectId, context);
+        }
+
+        // Gib mir ein Thread aus dem Pool und führe den Upload aus
+        cordova.getThreadPool().execute(new Runnable() {
+            @Override
+            public void run() {
+                if (context.aborted) {
+                    return;
+                }
+
+                HttpURLConnection conn = null;
+                HostnameVerifier oldHostnameVerifier = null;
+                SSLSocketFactory oldSocketFactory = null;
+
+                // Create return object
+                FileUploadResult result = new FileUploadResult();
+                FileProgressResult progress = new FileProgressResult();
+
+                CordovaResourceApi.OpenForReadResult readResult = null;
+                try {
+
+                    readResult = resourceApi.openForRead(sourceUri);
+
+                    OutputStream sendStream = null;
+
+                    int bytesAvailable = readResult.inputStream.available();
+                    int bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
+                    byte[] buffer = new byte[bufferSize];
+
+                    int bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
+                    int totalChunks = bytesAvailable / MAX_BUFFER_SIZE;
+                    int currentChunk = 0;
+
+                    while (bytesRead > 0) {
+
+
+                        // Setup HTTP-Connection
+                        conn = resourceApi.createHttpConnection(targetUri);
+
+                        if (useHttps && trustEveryone) {
+                            setupHttpsConnection((HttpsURLConnection) conn);
+                        }
+
+                        conn.setDoInput(true);
+                        conn.setDoOutput(true);
+                        conn.setUseCaches(false);
+                        conn.setRequestMethod(httpMethod);
+
+                        // ----
+
+                        // Set request headers
+                        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + BOUNDARY);
+                        // ----
+
+                        // Set request body
+                        StringBuilder body = createBody(buffer, currentChunk, totalChunks, "TOKENBLABLA");
+                        // ----
+
+                        // Read-in next chunk
+                        bytesAvailable = readResult.inputStream.available();
+                        bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
+                        bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
+                        currentChunk++;
+                        // ----
+
+                        int fixedLength = body.toString().getBytes("UTF-8").length + (LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END).getBytes("UTF-8").length;
+                        conn.setFixedLengthStreamingMode(fixedLength);
+                        conn.connect();
+
+                        try {
+                            sendStream = conn.getOutputStream();
+                            synchronized (context) {
+                                if (context.aborted) {
+                                    return;
+                                }
+                                context.connection = conn;
+                            }
+
+                            sendStream.write(body.toString().getBytes("UTF-8"));
+                            sendStream.write((LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END).getBytes("UTF-8"));
+                            sendStream.flush();
+
+                        } finally {
+                            safeClose(sendStream);
+                        }
+                        synchronized (context) {
+                            context.connection = null;
+                        }
+
+                        //------------------ read the SERVER RESPONSE
+                        String responseString;
+                        int responseCode = conn.getResponseCode();
+                        Log.d(LOG_TAG, "response code: " + responseCode);
+                        Log.d(LOG_TAG, "response headers: " + conn.getHeaderFields());
+                        TrackingInputStream inStream = null;
+                        try {
+                            inStream = getInputStream(conn);
+                            synchronized (context) {
+                                if (context.aborted) {
+                                    return;
+                                }
+                                context.connection = conn;
+                            }
+
+                            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, conn.getContentLength()));
+                            byte[] respBuffer = new byte[1024];
+                            int respBytesRead = 0;
+                            // write bytes to file
+                            while ((respBytesRead = inStream.read(respBuffer)) > 0) {
+                                out.write(respBuffer, 0, respBytesRead);
+                            }
+                            responseString = out.toString("UTF-8");
+                        } finally {
+                            synchronized (context) {
+                                context.connection = null;
+                            }
+                            safeClose(inStream);
+                        }
+
+                        Log.d(LOG_TAG, "got response from server");
+                        Log.d(LOG_TAG, responseString.substring(0, Math.min(256, responseString.length())));
+
+                        // send request and retrieve response
+                        result.setResponseCode(responseCode);
+                        result.setResponse(responseString);
+
+                        context.sendPluginResult(new PluginResult(PluginResult.Status.OK, result.toJSONObject()));
+
+                    }
+
+
+
+                } catch (IOException iox) {
+
+                    JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, conn, iox);
+                    Log.e(LOG_TAG, error.toString(), iox);
+
+                } catch (JSONException json) {
+
+                    JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, conn, json);
+                    Log.e(LOG_TAG, error.toString(), json);
+
+                } finally {
+
+                    safeClose(readResult.inputStream);
+
+                    synchronized (activeRequests) {
+                        activeRequests.remove(objectId);
+                    }
+
+                    if (conn != null) {
+                        // Revert back to the proper verifier and socket factories
+                        // Revert back to the proper verifier and socket factories
+                        if (trustEveryone && useHttps) {
+                            HttpsURLConnection https = (HttpsURLConnection) conn;
+                            https.setHostnameVerifier(oldHostnameVerifier);
+                            https.setSSLSocketFactory(oldSocketFactory);
+                        }
+                    }
+                }
+
+            }
+        });
+    }
+
+    private void setupHttpsConnection(HttpsURLConnection conn) {
+        SSLSocketFactory oldSocketFactory;
+        HostnameVerifier oldHostnameVerifier;// Setup the HTTPS connection class to trust everyone
+        HttpsURLConnection https = conn;
+        oldSocketFactory  = trustAllHosts(https);
+        // Save the current hostnameVerifier
+        oldHostnameVerifier = https.getHostnameVerifier();
+        // Setup the connection not to verify hostnames
+        https.setHostnameVerifier(DO_NOT_VERIFY);
+    }
+
+    private StringBuilder createBody(final byte[] chunk, final int currentChunk, final int totalChunks, final String token) {
+        StringBuilder body = new StringBuilder();
+
+
+        body.append(LINE_START).append(BOUNDARY).append(LINE_END);
+        body.append("Content-Disposition: form-data; name=\"chunk\"").append(LINE_END);
+        body.append("Content-Type: application/octet-stream");
+        body.append(LINE_END).append(LINE_END);
+
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            out.write(chunk);
+
+            body.append(out.toString("UTF-8"));
+        } catch (Exception e) {
+            System.out.println(e);
+        }
+
+        body.append(LINE_END);
+
+        body.append(LINE_START).append(BOUNDARY).append(LINE_END);
+        body.append("Content-Disposition: form-data; name=\"chunkNumber\"");
+        body.append(LINE_END).append(LINE_END);
+        body.append(currentChunk);
+        body.append(LINE_END);
+
+        body.append(LINE_START).append(BOUNDARY).append(LINE_END);
+        body.append("Content-Disposition: form-data; name=\"numOfChunks\"");
+        body.append(LINE_END).append(LINE_END);
+        body.append(totalChunks);
+        body.append(LINE_END);
+
+        body.append(LINE_START).append(BOUNDARY).append(LINE_END);
+        body.append("Content-Disposition: form-data; name=\"token\"");
+        body.append(LINE_END).append(LINE_END);
+        body.append(token);
+        body.append(LINE_END);
+
+        return body;
+    }
+
 
     private static void safeClose(Closeable stream) {
         if (stream != null) {
