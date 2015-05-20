@@ -134,28 +134,29 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     }
 }
 
-
+// creates multipart-request for chunked uploads
 - (NSURLRequest*)chunkedRequestForUploadCommand:(CDVInvokedUrlCommand*)command transporter:(ChunkTransporter * ) transporter {
     
     NSString* server = [command argumentAtIndex:1];
-    
+    NSDictionary* options = [command argumentAtIndex:5 withDefault:nil];
+    NSString* token = [options valueForKey:@"token"];
+   
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:server]];
-    
     
     NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", kFormBoundary];
     [request addValue:contentType forHTTPHeaderField:@"Content-Type"];
     
     NSMutableData *body = [NSMutableData data];
     
+    // Create NSRange to calculate the next chunk
     NSRange range = {transporter.chunkStart, transporter.chunkSize};
-    NSData *chunk = [transporter.file subdataWithRange:range];
+    NSData *chunk = nil;
     
-    NSLog(@"%lu", (unsigned long)[transporter.file length]);
-    
-    [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"chunk\"\r\n"] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[@"Content-Type: application/octet-stream\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[NSData dataWithData:chunk]];
+    @try {
+        chunk = [transporter.file subdataWithRange:range];
+    } @catch(NSException *x) { // thrown, if the total length of the file is smaller than the chunkSize
+        chunk = transporter.file;
+    }
     
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
     [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"chunkNumber\"\r\n\r\n%lu", (unsigned long)transporter.currentChunk] dataUsingEncoding:NSUTF8StringEncoding]];
@@ -164,12 +165,19 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"numOfChunks\"\r\n\r\n%lu", (unsigned long)transporter.totalChunks] dataUsingEncoding:NSUTF8StringEncoding]];
     
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"token\"\r\n\r\n%@", @"BLABLATOKENTEST"] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"token\"\r\n\r\n%@", token] dataUsingEncoding:NSUTF8StringEncoding]];
+    
+    [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"chunk\"\r\n"] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[@"Content-Type: application/octet-stream\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[NSData dataWithData:chunk]];
     
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
     
     [request setHTTPBody:body];
     
+    NSString *postLength = [NSString stringWithFormat:@"%lu", (unsigned long)[body length]];
+    [request setValue:postLength forHTTPHeaderField:@"Content-Length"];
     
     [request setHTTPMethod:@"POST"];
     
@@ -297,45 +305,29 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
 - (CDVFileTransferDelegate*)delegateForUploadCommand:(CDVInvokedUrlCommand*)command
 {
-    NSString* source = [command.arguments objectAtIndex:0];
-    NSString* server = [command.arguments objectAtIndex:1];
-    BOOL trustAllHosts = [[command.arguments objectAtIndex:6 withDefault:[NSNumber numberWithBool:NO]] boolValue]; // allow self-signed certs
-    NSString* objectId = [command.arguments objectAtIndex:9];
-
-    CDVFileTransferDelegate* delegate = [[CDVFileTransferDelegate alloc] init];
-
-    delegate.command = self;
-    delegate.callbackId = command.callbackId;
-    delegate.direction = CDV_TRANSFER_UPLOAD;
-    delegate.objectId = objectId;
-    delegate.source = source;
-    delegate.target = server;
-    delegate.trustAllHosts = trustAllHosts;
-    delegate.filePlugin = [self.commandDelegate getCommandInstance:@"File"];
-
-    return delegate;
+    return [self createDelegateWithDirection:CDV_TRANSFER_UPLOAD Command:command];
 }
 
 - (CDVFileTransferDelegate*) delegateForChunkedUploadCommand:(CDVInvokedUrlCommand *) command {
-    NSString* source = [command.arguments objectAtIndex:0];
-    NSString* server = [command.arguments objectAtIndex:1];
-    BOOL trustAllHosts = [[command.arguments objectAtIndex:6 withDefault:[NSNumber numberWithBool:NO]] boolValue]; // allow self-signed certs
-    NSString* objectId = [command.arguments objectAtIndex:9];
-    
+   
+    return [self createDelegateWithDirection:CDV_CHUNKED_UPLOAD Command:command];
+}
+
+- (CDVFileTransferDelegate*) createDelegateWithDirection:(CDVFileTransferDirection) direction Command:(CDVInvokedUrlCommand *) command {
+
     CDVFileTransferDelegate* delegate = [[CDVFileTransferDelegate alloc] init];
     
     delegate.command = self;
     delegate.callbackId = command.callbackId;
-    delegate.direction = CDV_CHUNKED_UPLOAD;
-    delegate.objectId = objectId;
-    delegate.source = source;
-    delegate.target = server;
-    delegate.trustAllHosts = trustAllHosts;
+    delegate.direction = direction;
+    delegate.objectId = [command.arguments objectAtIndex:9];
+    delegate.source = [command.arguments objectAtIndex:0];;
+    delegate.target = [command.arguments objectAtIndex:1];
+    delegate.trustAllHosts = [[command.arguments objectAtIndex:6 withDefault:[NSNumber numberWithBool:NO]] boolValue];
     delegate.filePlugin = [self.commandDelegate getCommandInstance:@"File"];
     
     return delegate;
 }
-
 
 - (void)fileDataForUploadCommand:(CDVInvokedUrlCommand*)command
 {
@@ -422,12 +414,14 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     [delegate.connection start];
 }
 
+
 - (void) uploadChunk:(ChunkTransporter *) transporter command:(CDVInvokedUrlCommand *) command {
     
     NSURLRequest* req = [self chunkedRequestForUploadCommand:command transporter:(ChunkTransporter *) transporter];
     [self startRequestDelegateWith:command AndRequest:req];
     
 }
+
 
 - (void)uploadData:(NSData*)fileData command:(CDVInvokedUrlCommand*)command
 {
@@ -436,17 +430,17 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     
     if (sendChunked) {
         
-        NSUInteger chunkSize = 100 * 1024;
+        float chunkSize = 100.0 * 1024.0;
         
         ChunkTransporter *transporter = [ChunkTransporter new];
         
         transporter.file = fileData;
         transporter.urlCommand = command;
-        transporter.chunkStart = 0;
-        transporter.chunkEnd = chunkSize;
+        transporter.chunkStart = 0; // Byte to start the chunk at
+        transporter.chunkEnd = chunkSize; // The end byte of the chunk
         transporter.chunkSize = chunkSize;
         transporter.currentChunk = 1;
-        transporter.totalChunks = [fileData length] / chunkSize;
+        transporter.totalChunks = ceilf((float)[fileData length] / chunkSize); // the rounded count of chunks that will be uploaded
         
         self.chunkTransporter = transporter;
         
@@ -674,7 +668,6 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSString* downloadResponse = nil;
     NSMutableDictionary* uploadResult;
     CDVPluginResult* result = nil;
-    NSLog(@"BLABLA");
     NSLog(@"File Transfer Finished with response code %d", self.responseCode);
 
     
@@ -905,7 +898,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
 - (void)connection:(NSURLConnection*)connection didSendBodyData:(NSInteger)bytesWritten totalBytesWritten:(NSInteger)totalBytesWritten totalBytesExpectedToWrite:(NSInteger)totalBytesExpectedToWrite
 {
-    if (self.direction == CDV_TRANSFER_UPLOAD) {
+    if (self.direction != CDV_TRANSFER_DOWNLOAD) {
         NSMutableDictionary* uploadProgress = [NSMutableDictionary dictionaryWithCapacity:3];
 
         [uploadProgress setObject:[NSNumber numberWithBool:true] forKey:@"lengthComputable"];
