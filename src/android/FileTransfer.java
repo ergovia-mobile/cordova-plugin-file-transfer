@@ -28,11 +28,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URLConnection;
+import java.nio.charset.Charset;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.HashMap;
@@ -257,7 +260,7 @@ public class FileTransfer extends CordovaPlugin {
         // Accept a path or a URI for the source.
         Uri tmpSrc = Uri.parse(source);
         final Uri sourceUri = resourceApi.remapUri(
-            tmpSrc.getScheme() != null ? tmpSrc : Uri.fromFile(new File(source)));
+                tmpSrc.getScheme() != null ? tmpSrc : Uri.fromFile(new File(source)));
 
         int uriType = CordovaResourceApi.getUriType(targetUri);
         final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
@@ -511,13 +514,8 @@ public class FileTransfer extends CordovaPlugin {
 
     private void chunkedUpload(final String source, final String target, JSONArray args, CallbackContext callbackContext) throws JSONException {
 
-        final String fileKey = getArgument(args, 2, "file");
-        final String fileName = getArgument(args, 3, "image.jpg");
-        final String mimeType = getArgument(args, 4, "image/jpeg");
         final JSONObject params = args.optJSONObject(5) == null ? new JSONObject() : args.optJSONObject(5);
         final boolean trustEveryone = args.optBoolean(6);
-        // Always use chunked mode unless set to false as per API
-        final boolean chunkedMode = args.optBoolean(7) || args.isNull(7);
         // Look for headers on the params map for backwards compatibility with older Cordova versions.
         final JSONObject headers = args.optJSONObject(8) == null ? params.optJSONObject("headers") : args.optJSONObject(8);
         final String objectId = args.getString(9);
@@ -571,14 +569,15 @@ public class FileTransfer extends CordovaPlugin {
                     readResult = resourceApi.openForRead(sourceUri);
 
                     OutputStream sendStream = null;
+                    PrintWriter writer = null;
 
                     int bytesAvailable = readResult.inputStream.available();
                     int bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
                     byte[] buffer = new byte[bufferSize];
 
                     int bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
-                    int totalChunks = bytesAvailable / MAX_BUFFER_SIZE;
-                    int currentChunk = 0;
+                    double totalChunks = Math.ceil((float) bytesAvailable / bufferSize);
+                    int currentChunk = 1;
 
                     while (bytesRead > 0) {
 
@@ -601,19 +600,6 @@ public class FileTransfer extends CordovaPlugin {
                         conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + BOUNDARY);
                         // ----
 
-                        // Set request body
-                        StringBuilder body = createBody(buffer, currentChunk, totalChunks, "TOKENBLABLA");
-                        // ----
-
-                        // Read-in next chunk
-                        bytesAvailable = readResult.inputStream.available();
-                        bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
-                        bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
-                        currentChunk++;
-                        // ----
-
-                        int fixedLength = body.toString().getBytes("UTF-8").length + (LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END).getBytes("UTF-8").length;
-                        conn.setFixedLengthStreamingMode(fixedLength);
                         conn.connect();
 
                         try {
@@ -625,12 +611,23 @@ public class FileTransfer extends CordovaPlugin {
                                 context.connection = conn;
                             }
 
-                            sendStream.write(body.toString().getBytes("UTF-8"));
+                            // Set request body
+                            writer = new PrintWriter(new OutputStreamWriter(sendStream, Charset.forName("UTF-8")));
+                            createBody(writer, sendStream, buffer, currentChunk, (int) totalChunks, params.getString("token"));
                             sendStream.write((LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END).getBytes("UTF-8"));
                             sendStream.flush();
+                            // ----
+
+                            // Read-in next chunk
+                            bytesAvailable = readResult.inputStream.available();
+                            bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
+                            bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
+                            currentChunk++;
+                            // ----
 
                         } finally {
                             safeClose(sendStream);
+                            safeClose(writer);
                         }
                         synchronized (context) {
                             context.connection = null;
@@ -723,45 +720,41 @@ public class FileTransfer extends CordovaPlugin {
         https.setHostnameVerifier(DO_NOT_VERIFY);
     }
 
-    private StringBuilder createBody(final byte[] chunk, final int currentChunk, final int totalChunks, final String token) {
-        StringBuilder body = new StringBuilder();
+    private void createBody(final PrintWriter writer, final OutputStream outputStream, final byte[] chunk, final int currentChunk, final int totalChunks, final String token) {
+        addFormField(writer, "chunkNumber", Integer.toString(currentChunk));
+        addFormField(writer, "numOfChunks", Integer.toString(totalChunks));
+        addFormField(writer, "token", token);
+        addFilePart(writer, outputStream, "chunk", chunk);
+    }
 
+    private void addFormField(final PrintWriter writer, final String name, final String value) {
+        writer.append(LINE_START).append(BOUNDARY).append(LINE_END);
+        writer.append("Content-Disposition: form-data; name=\"" + name + "\"");
+        writer.append(LINE_END).append(LINE_END);
+        writer.append(value);
+        writer.append(LINE_END);
+        writer.flush();
+    }
 
-        body.append(LINE_START).append(BOUNDARY).append(LINE_END);
-        body.append("Content-Disposition: form-data; name=\"chunk\"").append(LINE_END);
-        body.append("Content-Type: application/octet-stream");
-        body.append(LINE_END).append(LINE_END);
+    private void addFilePart(final PrintWriter writer, final OutputStream outputStream, final String name, final byte[] chunk) {
+
+        writer.append(LINE_START).append(BOUNDARY).append(LINE_END);
+        writer.append("Content-Disposition: form-data; name=\"chunk\"").append(LINE_END);
+        writer.append("Content-Type: application/octet-stream");
+        writer.append(LINE_END).append(LINE_END);
+        writer.flush();
 
         try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            out.write(chunk);
+            outputStream.write(chunk);
+            outputStream.flush();
 
-            body.append(out.toString("UTF-8"));
         } catch (Exception e) {
             System.out.println(e);
         }
 
-        body.append(LINE_END);
+        writer.append(LINE_END);
+        writer.flush();
 
-        body.append(LINE_START).append(BOUNDARY).append(LINE_END);
-        body.append("Content-Disposition: form-data; name=\"chunkNumber\"");
-        body.append(LINE_END).append(LINE_END);
-        body.append(currentChunk);
-        body.append(LINE_END);
-
-        body.append(LINE_START).append(BOUNDARY).append(LINE_END);
-        body.append("Content-Disposition: form-data; name=\"numOfChunks\"");
-        body.append(LINE_END).append(LINE_END);
-        body.append(totalChunks);
-        body.append(LINE_END);
-
-        body.append(LINE_START).append(BOUNDARY).append(LINE_END);
-        body.append("Content-Disposition: form-data; name=\"token\"");
-        body.append(LINE_END).append(LINE_END);
-        body.append(token);
-        body.append(LINE_END);
-
-        return body;
     }
 
 
