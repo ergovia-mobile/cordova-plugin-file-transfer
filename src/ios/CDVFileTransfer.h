@@ -39,6 +39,8 @@ typedef int CDVFileTransferDirection;
 @interface ChunkTransporter : NSObject {}
 @property (nonatomic, strong) CDVInvokedUrlCommand *urlCommand;
 @property (nonatomic, strong) NSData *file;
+@property (nonatomic, strong) NSString *server;
+@property (nonatomic, strong) NSString *source;
 @property (nonatomic) NSUInteger chunkStart;
 @property (nonatomic) NSUInteger chunkEnd;
 @property (nonatomic) NSUInteger chunkSize;
@@ -66,7 +68,7 @@ extern NSString* const kOptionsKeyCookie;
                                         AndBody:(NSString*)body;
 @property (nonatomic, strong) NSOperationQueue* queue;
 @property (readonly) NSMutableDictionary* activeTransfers;
-@property (nonatomic, strong) ChunkTransporter *chunkTransporter;
+@property (nonatomic, strong) NSMutableDictionary* chunkTransporters;
 @end
 
 @class CDVFileTransferEntityLengthRequest;
