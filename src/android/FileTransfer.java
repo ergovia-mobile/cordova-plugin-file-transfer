@@ -178,13 +178,56 @@ public class FileTransfer extends CordovaPlugin {
     @Override
     public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
         if (action.equals("upload") || action.equals("download")) {
-            String source = args.getString(0);
-            String target = args.getString(1);
+
+            JSONArray sources;
+            JSONArray targets;
+            String source;
+            String target;
 
             if (action.equals("upload")) {
-                chunkedUpload(source, target, args, callbackContext);
+
+                if (args.get(0) instanceof String) {
+
+                    source = (String) args.get(0);
+                    target = (String) args.get(1);
+                    chunkedUpload(source, target, args, callbackContext);
+
+                } else {
+
+                    sources = args.getJSONArray(0);
+                    targets = args.getJSONArray(1);
+
+                    for (int i = 0; i < sources.length(); i++) {
+
+                        source = (String) sources.get(i);
+                        target = (String) targets.get(i);
+                        chunkedUpload(source, target, args, callbackContext);
+
+                    }
+                }
+
+
             } else {
-                download(source, target, args, callbackContext);
+
+                if (args.get(0) instanceof String) {
+
+                    source = (String) args.get(0);
+                    target = (String) args.get(1);
+                    download(source, target, args, callbackContext);
+
+                } else {
+
+                    sources = args.getJSONArray(0);
+                    targets = args.getJSONArray(1);
+
+                    for (int i = 0; i < sources.length(); i++) {
+
+                        source = (String) sources.get(i);
+                        target = (String) targets.get(i);
+                        download(source, target, args, callbackContext);
+
+                    }
+                }
             }
             return true;
         } else if (action.equals("abort")) {
