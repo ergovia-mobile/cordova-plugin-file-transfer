@@ -138,8 +138,8 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 - (NSURLRequest*)chunkedRequestForUploadCommand:(CDVInvokedUrlCommand*)command transporter:(ChunkTransporter * ) transporter {
     
     NSString* server = transporter.server;
-    NSDictionary* options = [command argumentAtIndex:5 withDefault:nil];
-    NSString* token = [options valueForKey:@"token"];
+    NSDictionary* headers = [command argumentAtIndex:8 withDefault:nil];
+    NSString* token = [headers valueForKey:@"token"];
    
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:server]];
     
@@ -180,6 +180,8 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     [request setValue:postLength forHTTPHeaderField:@"Content-Length"];
     
     [request setHTTPMethod:@"POST"];
+    
+    [self applyRequestHeaders:headers toRequest:request];
     
     return request;
 }

@@ -639,6 +639,11 @@ public class FileTransfer extends CordovaPlugin {
 
                         // ----
 
+	                    // Handle the other headers
+	                    if (headers != null) {
+	                        addHeadersToRequest(conn, headers);
+	                    }
+
                         // Set request headers
                         conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + BOUNDARY);
                         // ----
