@@ -661,7 +661,7 @@ public class FileTransfer extends CordovaPlugin {
 
                             // Set request body
                             writer = new PrintWriter(new OutputStreamWriter(sendStream, Charset.forName("UTF-8")));
-                            createBody(writer, sendStream, buffer, currentChunk, (int) totalChunks, params.getString("token"));
+                            createBody(writer, sendStream, buffer, currentChunk, (int) totalChunks, headers.getString("token"));
                             sendStream.write((LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END).getBytes("UTF-8"));
                             sendStream.flush();
                             // ----
