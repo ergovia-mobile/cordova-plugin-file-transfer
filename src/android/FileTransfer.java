@@ -67,6 +67,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
 import android.webkit.CookieManager;
+import org.apache.cordova.Whitelist;
 
 public class FileTransfer extends CordovaPlugin {
 
@@ -988,11 +989,22 @@ public class FileTransfer extends CordovaPlugin {
         }
 
         // TODO: refactor to also allow resources & content:
-        if (!isLocalTransfer && !Config.isUrlWhiteListed(source)) {
-            Log.w(LOG_TAG, "Source URL is not in white list: '" + source + "'");
-            JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, null, 401, null);
-            callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
-            return;
+        try {
+            Method gwl = webView.getClass().getMethod("getWhitelist");
+            Whitelist whitelist = (Whitelist)gwl.invoke(webView);
+            boolean isWhiteListed = whitelist.isUrlWhiteListed(source);
+
+            if (!isLocalTransfer && !isWhiteListed) {
+                Log.w(LOG_TAG, "Source URL is not in white list: '" + source + "'");
+                JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, null, 401, null);
+                callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+                return;
+            }
+
+        } catch(IllegalAccessException ex) {
+        } catch(InvocationTargetException ex) {
+        } catch(NoSuchMethodException ex) {
+            Log.e(LOG_TAG, "no whitelist!");
         }
 
 
