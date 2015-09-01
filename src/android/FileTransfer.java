@@ -184,6 +184,7 @@ public class FileTransfer extends CordovaPlugin {
             JSONArray targets;
             String source;
             String target;
+            final boolean sendChunks = args.optBoolean(11) || args.isNull(11);
 
             if (action.equals("upload")) {
 
@@ -191,7 +192,11 @@ public class FileTransfer extends CordovaPlugin {
 
                     source = (String) args.get(0);
                     target = (String) args.get(1);
-                    chunkedUpload(source, target, args, callbackContext);
+                    if (sendChunks) {
+                        chunkedUpload(source, target, args, callbackContext);
+                    } else {
+                        upload(source, target, args, callbackContext);
+                    }
 
                 } else {
 
@@ -202,7 +207,13 @@ public class FileTransfer extends CordovaPlugin {
 
                         source = (String) sources.get(i);
                         target = (String) targets.get(i);
-                        chunkedUpload(source, target, args, callbackContext);
+
+                        if (sendChunks) {
+                            chunkedUpload(source, target, args, callbackContext);
+                        } else {
+                            upload(source, target, args, callbackContext);
+                        }
+
 
                     }
                 }
