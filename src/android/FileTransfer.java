@@ -184,7 +184,7 @@ public class FileTransfer extends CordovaPlugin {
             JSONArray targets;
             String source;
             String target;
-            final boolean sendChunks = args.optBoolean(11) || args.isNull(11);
+            final boolean sendChunks = args.optBoolean(11);
 
             if (action.equals("upload")) {
 
