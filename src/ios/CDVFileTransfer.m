@@ -838,14 +838,22 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 - (NSString *)targetFilePath
 {
     NSString *path = nil;
-    CDVFilesystemURL *sourceURL = [CDVFilesystemURL fileSystemURLWithString:self.target];
+    NSString *sourcePath = nil;
+    
+    if ([self.target isKindOfClass:[NSArray class]]) {
+        sourcePath = [(NSArray *)self.target firstObject];
+    } else {
+        sourcePath = self.target;
+    }
+    
+    CDVFilesystemURL *sourceURL = [CDVFilesystemURL fileSystemURLWithString:sourcePath];
     if (sourceURL && sourceURL.fileSystemName != nil) {
         // This requires talking to the current CDVFile plugin
         NSObject<CDVFileSystem> *fs = [self.filePlugin filesystemForURL:sourceURL];
         path = [fs filesystemPathForURL:sourceURL];
     } else {
         // Extract the path part out of a file: URL.
-        path = [self.target hasPrefix:@"/"] ? [self.target copy] : [(NSURL *)[NSURL URLWithString:self.target] path];
+        path = [sourcePath hasPrefix:@"/"] ? [sourcePath copy] : [(NSURL *)[NSURL URLWithString:sourcePath] path];
     }
     return path;
 }
