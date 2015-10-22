@@ -564,7 +564,9 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         return;
     }
 
-    NSMutableURLRequest* req = [NSMutableURLRequest requestWithURL:sourceURL];
+    NSMutableURLRequest* req = [NSMutableURLRequest requestWithURL:sourceURL
+                            cachePolicy:NSURLRequestUseProtocolCachePolicy
+                        timeoutInterval:240.0];
     [self applyRequestHeaders:headers toRequest:req];
 
     CDVFileTransferDelegate* delegate = [[CDVFileTransferDelegate alloc] init];
