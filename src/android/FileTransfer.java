@@ -575,6 +575,7 @@ public class FileTransfer extends CordovaPlugin {
         final boolean trustEveryone = args.optBoolean(6);
         // Look for headers on the params map for backwards compatibility with older Cordova versions.
         final JSONObject headers = args.optJSONObject(8) == null ? params.optJSONObject("headers") : args.optJSONObject(8);
+        final int mediaType = args.optInt(12);
         final String objectId = args.getString(9);
         final String httpMethod = getArgument(args, 10, "POST");
 
@@ -676,7 +677,7 @@ public class FileTransfer extends CordovaPlugin {
 
                             // Set request body
                             writer = new PrintWriter(new OutputStreamWriter(sendStream, Charset.forName("UTF-8")));
-                            createBody(writer, sendStream, buffer, currentChunk, (int) totalChunks, headers.getString("token"));
+                            createBody(writer, sendStream, buffer, currentChunk, (int) totalChunks, mediaType);
                             sendStream.write((LINE_END + LINE_START + BOUNDARY + LINE_END).getBytes("UTF-8"));
                             sendStream.flush();
                             // ----
@@ -789,10 +790,10 @@ public class FileTransfer extends CordovaPlugin {
         https.setHostnameVerifier(DO_NOT_VERIFY);
     }
 
-    private void createBody(final PrintWriter writer, final OutputStream outputStream, final byte[] chunk, final int currentChunk, final int totalChunks, final String token) {
-        addFormField(writer, "chunkNumber", Integer.toString(currentChunk));
-        addFormField(writer, "numOfChunks", Integer.toString(totalChunks));
-        addFormField(writer, "token", token);
+    private void createBody(final PrintWriter writer, final OutputStream outputStream, final byte[] chunk, final int currentChunk, final int totalChunks, final int type) {
+        addFormField(writer, "current", Integer.toString(currentChunk));
+        addFormField(writer, "expected", Integer.toString(totalChunks));
+        addFormField(writer, "type", Integer.toString(type));
         addFilePart(writer, outputStream, "chunk", chunk);
     }
 
