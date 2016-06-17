@@ -159,13 +159,13 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     }
     
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"chunkNumber\"\r\n\r\n%lu", (unsigned long)transporter.currentChunk] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"current\"\r\n\r\n%lu", (unsigned long)transporter.current] dataUsingEncoding:NSUTF8StringEncoding]];
     
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"numOfChunks\"\r\n\r\n%lu", (unsigned long)transporter.totalChunks] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"expected\"\r\n\r\n%lu", (unsigned long)transporter.expected] dataUsingEncoding:NSUTF8StringEncoding]];
     
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"token\"\r\n\r\n%@", token] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"type\"\r\n\r\n%lu", (unsigned long)transporter.type] dataUsingEncoding:NSUTF8StringEncoding]];
     
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", kFormBoundary] dataUsingEncoding:NSUTF8StringEncoding]];
     [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"chunk\"\r\n"] dataUsingEncoding:NSUTF8StringEncoding]];
@@ -455,7 +455,8 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 {
 
     BOOL sendChunked = [[command argumentAtIndex:11 withDefault:[NSNumber numberWithBool:NO]] boolValue];
-
+    int mediaType = [[command argumentAtIndex:12] intValue];
+    
     if (sendChunked) {
 
         float chunkSize = 100.0 * 1024.0;
@@ -469,8 +470,9 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         transporter.chunkStart = 0; // Byte to start the chunk at
         transporter.chunkEnd = chunkSize; // The end byte of the chunk
         transporter.chunkSize = chunkSize;
-        transporter.currentChunk = 1;
-        transporter.totalChunks = ceilf((float)[fileData length] / chunkSize); // the rounded count of chunks that will be uploaded
+        transporter.current = 1;
+        transporter.expected = ceilf((float)[fileData length] / chunkSize); // the rounded count of chunks that will be uploaded
+        transporter.type = mediaType;
 
         [self.chunkTransporters setObject:transporter forKey:source];
 
@@ -566,7 +568,10 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSMutableURLRequest* req = [NSMutableURLRequest requestWithURL:sourceURL
                             cachePolicy:NSURLRequestUseProtocolCachePolicy
                         timeoutInterval:240.0];
-    [self applyRequestHeaders:headers toRequest:req];
+    
+    if(![headers isKindOfClass:[NSNull class]]) {
+        [self applyRequestHeaders:headers toRequest:req];
+    }
 
     CDVFileTransferDelegate* delegate = [[CDVFileTransferDelegate alloc] init];
     delegate.command = self;
@@ -709,11 +714,11 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         if ((self.responseCode >= 200) && (self.responseCode < 300)) {
 
             ChunkTransporter* transporter = [command.chunkTransporters objectForKey:source];
-            transporter.currentChunk++;
+            transporter.current++;
             transporter.chunkStart = transporter.chunkEnd;
             transporter.chunkEnd = transporter.chunkEnd + transporter.chunkSize;
 
-            if (transporter.currentChunk <= transporter.totalChunks) {
+            if (transporter.current <= transporter.expected) {
                 [command uploadChunk:transporter command:transporter.urlCommand];
 
             } else {

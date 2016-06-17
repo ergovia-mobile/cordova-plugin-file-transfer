@@ -44,8 +44,9 @@ typedef int CDVFileTransferDirection;
 @property (nonatomic) NSUInteger chunkStart;
 @property (nonatomic) NSUInteger chunkEnd;
 @property (nonatomic) NSUInteger chunkSize;
-@property (nonatomic) NSUInteger currentChunk;
-@property (nonatomic) NSUInteger totalChunks;
+@property (nonatomic) NSUInteger current;
+@property (nonatomic) NSUInteger expected;
+@property (nonatomic) NSUInteger type;
 @end
 
 // Magic value within the options dict used to set a cookie.
