@@ -729,8 +729,6 @@ public class FileTransfer extends CordovaPlugin {
                         result.setResponseCode(responseCode);
                         result.setResponse(responseString);
 
-                        context.sendPluginResult(new PluginResult(PluginResult.Status.OK, result.toJSONObject()));
-
                         // Read-in next chunk
                         bytesAvailable = readResult.inputStream.available();
                         bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
@@ -740,7 +738,9 @@ public class FileTransfer extends CordovaPlugin {
                         // ----
                     }
 
-
+                    PluginResult uploadFinish = new PluginResult(PluginResult.Status.OK, result.toJSONObject());
+                    test.setKeepCallback(true);
+                    context.sendPluginResult(uploadFinish);
 
                 } catch (IOException iox) {
 
