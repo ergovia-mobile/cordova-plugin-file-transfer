@@ -739,7 +739,7 @@ public class FileTransfer extends CordovaPlugin {
                     }
 
                     PluginResult uploadFinish = new PluginResult(PluginResult.Status.OK, result.toJSONObject());
-                    test.setKeepCallback(true);
+                    uploadFinish.setKeepCallback(true);
                     context.sendPluginResult(uploadFinish);
 
                 } catch (IOException iox) {
