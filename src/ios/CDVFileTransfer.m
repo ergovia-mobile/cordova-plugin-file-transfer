@@ -149,7 +149,13 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSMutableData *body = [NSMutableData data];
     
     // Create NSRange to calculate the next chunk
-    NSRange range = {transporter.chunkStart, transporter.chunkSize};
+    NSRange range;
+    if (transporter.chunkStart + transporter.chunkSize <= transporter.file.length) {
+        range = NSMakeRange(transporter.chunkStart, transporter.chunkSize);
+    } else {
+        range = NSMakeRange(transporter.chunkStart, transporter.file.length - transporter.chunkStart);
+    }
+
     NSData *chunk = nil;
     
     @try {
